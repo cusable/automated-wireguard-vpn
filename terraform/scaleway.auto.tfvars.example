@@ -1,0 +1,4 @@
+access_key      = "ACCESS_KEY_HERE"
+secret_key      = "SECRET_KEY_HERE"
+organization_id = "ORG_ID_HERE"
+project_id      = "PROJECT_ID_HERE"

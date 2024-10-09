@@ -1,0 +1,11 @@
+# templates/client.conf.j2
+[Interface]
+Address = 192.168.100.2/32,{{ ula_prefix }}::2/128
+PrivateKey = {{ peer_private_key }}
+DNS = 1.1.1.1,2606:4700:4700::1111
+
+[Peer]
+PublicKey = {{ wireguard_server_public_key }}
+Endpoint = {{ wireguard_server_ip }}:{{ wireguard_port }}
+AllowedIPs = 0.0.0.0/0,::/0
+PersistentKeepalive = 25

@@ -1,0 +1,8 @@
+# templates/wireguard_server.conf.j2
+[Interface]
+PrivateKey = {{ wireguard_server_private_key }}
+Address = 192.168.100.1/24,{{ ula_prefix }}::1/64
+PostUp = nft add table ip wireguard; nft add chain ip wireguard wireguard_chain { type nat hook postrouting priority srcnat\; policy accept\; }; nft add rule ip wireguard wireguard_chain counter masquerade; nft add table ip6 wireguard; nft add chain ip6 wireguard wireguard_chain { type nat hook postrouting priority srcnat\; policy accept\; }; nft add rule ip6 wireguard wireguard_chain counter masquerade
+PostDown = nft delete table ip wireguard; nft delete table ip6 wireguard
+ListenPort = {{ wireguard_port }}
+# Peer configurations will be appended by Ansible

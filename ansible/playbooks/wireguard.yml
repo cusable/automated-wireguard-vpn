@@ -1,0 +1,222 @@
+# playbooks/wireguard.yml
+
+- name: Set up and configure WireGuard VPN on the server
+  hosts: wireguard
+  become: yes
+  vars:
+    wireguard_port: 51820
+    wireguard_interface: wg0
+    ula_prefix: "{{ ula_prefix }}"
+  tasks:
+    - name: Install WireGuard VPN package
+      apt:
+        name: wireguard
+        state: present
+        update_cache: yes
+
+    - name: Enable IPv4 packet forwarding
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        state: present
+        reload: yes
+
+    - name: Enable IPv6 packet forwarding
+      sysctl:
+        name: net.ipv6.conf.all.forwarding
+        value: "1"
+        state: present
+        reload: yes
+
+    - name: Create directory for WireGuard configuration files
+      file:
+        path: /etc/wireguard
+        state: directory
+        mode: "0700"
+
+    - name: Check if the server's WireGuard private key exists
+      stat:
+        path: /etc/wireguard/server_private.key
+      register: private_key_check
+
+    - name: Generate server private key if missing
+      command: wg genkey
+      register: generated_server_private_key
+      when: not private_key_check.stat.exists
+
+    - name: Save server private key to file
+      copy:
+        content: "{{ generated_server_private_key.stdout }}"
+        dest: /etc/wireguard/server_private.key
+        mode: "0600"
+      when: generated_server_private_key.stdout is defined
+
+    - name: Verify server private key after saving
+      stat:
+        path: /etc/wireguard/server_private.key
+      register: private_key_post_check
+
+    - name: Read server private key from file
+      slurp:
+        src: /etc/wireguard/server_private.key
+      register: server_private_key_content
+      when: private_key_post_check.stat.exists
+
+    - name: Check if the server's WireGuard public key exists
+      stat:
+        path: /etc/wireguard/server_public.key
+      register: public_key_check
+
+    - name: Generate server public key if missing
+      shell: "echo '{{ server_private_key_content.content | b64decode }}' | wg pubkey"
+      register: generated_server_public_key
+      when: not public_key_check.stat.exists
+
+    - name: Save server public key to file
+      copy:
+        content: "{{ generated_server_public_key.stdout }}"
+        dest: /etc/wireguard/server_public.key
+        mode: "0644"
+      when: generated_server_public_key.stdout is defined
+
+    - name: Verify server public key after saving
+      stat:
+        path: /etc/wireguard/server_public.key
+      register: public_key_post_check
+
+    - name: Read server public key from file
+      slurp:
+        src: /etc/wireguard/server_public.key
+      register: server_public_key_content
+      when: public_key_post_check.stat.exists
+
+    - name: Transfer server public key to control node
+      delegate_to: localhost
+      copy:
+        content: "{{ server_public_key_content.content | b64decode }}"
+        dest: "../keys/server_public.key"
+        mode: "0644"
+      become: no
+
+    - name: Generate WireGuard server configuration file
+      template:
+        src: ../templates/wireguard.conf.j2
+        dest: /etc/wireguard/{{ wireguard_interface }}.conf
+        mode: "0600"
+      vars:
+        wireguard_server_private_key: "{{ server_private_key_content.content | b64decode }}"
+
+- name: Generate client WireGuard configuration on control node
+  hosts: localhost
+  vars:
+    wireguard_port: 51820
+    wireguard_interface: wg0
+    wireguard_server_ip: "{{ wireguard_server_ip }}"
+    ula_prefix: "{{ ula_prefix }}"
+  tasks:
+    - name: Check if the client private key exists
+      stat:
+        path: ../keys/client_private.key
+      register: client_private_key_check
+
+    - name: Generate client private key if missing
+      command: wg genkey
+      register: generated_client_private_key
+      when: not client_private_key_check.stat.exists
+
+    - name: Save client private key to file
+      copy:
+        content: "{{ generated_client_private_key.stdout }}"
+        dest: ../keys/client_private.key
+        mode: "0600"
+      when: generated_client_private_key.stdout is defined
+
+    - name: Verify client private key after saving
+      stat:
+        path: ../keys/client_private.key
+      register: client_private_key_post_check
+
+    - name: Read client private key from file
+      slurp:
+        src: ../keys/client_private.key
+      register: client_private_key_content
+      when: client_private_key_post_check.stat.exists
+
+    - name: Check if the client public key exists
+      stat:
+        path: ../keys/client_public.key
+      register: client_public_key_check
+
+    - name: Generate client public key if missing
+      shell: "echo '{{ client_private_key_content.content | b64decode }}' | wg pubkey"
+      register: generated_client_public_key
+      when: not client_public_key_check.stat.exists
+
+    - name: Save client public key to file
+      copy:
+        content: "{{ generated_client_public_key.stdout }}"
+        dest: ../keys/client_public.key
+        mode: "0644"
+      register: client_public_key_saved
+      when: generated_client_public_key.stdout is defined
+
+    - name: Verify client public key after saving
+      stat:
+        path: ../keys/client_public.key
+      register: client_public_key_post_check
+
+    - name: Read client public key from file
+      slurp:
+        src: ../keys/client_public.key
+      register: client_public_key_content
+      when: client_public_key_post_check.stat.exists
+
+    - name: Transfer client public key to server
+      delegate_to: "{{ groups['wireguard'][0] }}"
+      become: yes
+      copy:
+        src: "../keys/client_public.key"
+        dest: "/etc/wireguard/client_public.key"
+        mode: "0644"
+
+    - name: Retrieve server public key from control node
+      slurp:
+        src: "../keys/server_public.key"
+      register: server_public_key_content
+
+    - name: Generate client WireGuard configuration
+      template:
+        src: ../templates/client.conf.j2
+        dest: "../config/client.conf"
+        mode: "0600"
+      vars:
+        peer_private_key: "{{ client_private_key_content.content | b64decode }}"
+        wireguard_server_public_key: "{{ server_public_key_content.content | b64decode }}"
+
+    - name: Add client public key to server configuration
+      delegate_to: "{{ groups['wireguard'][0] }}"
+      become: yes
+      lineinfile:
+        path: "/etc/wireguard/{{ wireguard_interface }}.conf"
+        insertafter: EOF
+        line: |
+          [Peer]
+          PublicKey = {{ client_public_key_content.content | b64decode }}
+          AllowedIPs = 192.168.100.2/32,{{ ula_prefix }}::2/128
+          PersistentKeepalive = 25
+
+    - name: Enable and start the WireGuard service
+      delegate_to: "{{ groups['wireguard'][0] }}"
+      become: yes
+      systemd:
+        name: wg-quick@{{ wireguard_interface }}
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Restart the WireGuard service
+      delegate_to: "{{ groups['wireguard'][0] }}"
+      become: yes
+      systemd:
+        name: wg-quick@{{ wireguard_interface }}
+        state: restarted
